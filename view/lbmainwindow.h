@@ -148,6 +148,7 @@ public slots:
     void on_actionImage_Processing_triggered();
     void on_actionGeometry_triggered();
 private slots:
+    void enableGPU(bool enabled);
     void on_actionExec_2_it_triggered();
     void on_actionExec_4_it_triggered();
     void on_actionExec_8_it_triggered();

@@ -69,7 +69,7 @@ void SCCell::preUpdate(double epsilon[], BaseCell* neighbors[], Grid *grid, Vect
         forcesVelocity = forcesVelocity + du;
     }
     int model = Shared::instance()->getGridConfig()->getModel();
-    double *cacheF0 = new double[model];
+    double cacheF0[32];
     for (int i = 0; i < model; i++) {
         cacheF0[i] = getF0(i, epsilon[0], neighbors, grid);
     }
@@ -99,7 +99,7 @@ void SCCell::preUpdate(double epsilon[], BaseCell* neighbors[], Grid *grid, Vect
             neighbor->setNextF(i, newF, 0);
         }
     }
-    delete[] cacheF0;
+    // cacheF0 is stack-allocated
     //LBUtil::update(model, epsilon, neighbors, nextF);
 }
 

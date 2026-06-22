@@ -67,6 +67,7 @@ QString LBMainWindow::getVersion() {
 
 LBMainWindow::LBMainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::LBMainWindow) {
     ui->setupUi(this);
+    connect(ui->actionEnableGPU, SIGNAL(toggled(bool)), this, SLOT(enableGPU(bool)));
     widget = new LBWidget();
     this->setCentralWidget(widget);
     colors = new Colors(widget, this);
@@ -708,6 +709,20 @@ void LBMainWindow::on_actionExec_512_it_triggered() {
 void LBMainWindow::on_actionExec_1024_it_triggered() {
     for (int i = 0; i < 1024; i++) {
         on_actionNext_triggered();
+    }
+}
+
+void LBMainWindow::enableGPU(bool enabled) {
+    if (enabled) {
+        qDebug() << "Initializing OpenCL GPU...";
+        Grid* grid = widget->getPainter()->getGrid();
+        if (grid->initOpenCL(true)) {
+            qDebug() << "GPU enabled successfully on:" << QString::fromStdString(grid->getOpenCLDeviceName());
+        } else {
+            qDebug() << "GPU initialization failed";
+        }
+    } else {
+        qDebug() << "GPU disabled - using CPU";
     }
 }
 

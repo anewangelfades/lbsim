@@ -57,6 +57,10 @@
 #endif
 #include <QtCore>
 #include "../../model/listener/listenerdata.h"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 //#include "opencl/multilatticeboltzmannopencl.h"
 //#include "opencl/allocation.h"
 #include "../../model/listener/listener.h"
@@ -68,6 +72,7 @@
 #include "meltingsolidification/kornerimplementation.h"
 #include <cmath>
 #include "immersed/immersedboundarycontainer.h"
+#include "opencl/lbopencl.h"
 #include <QDebug>
 #include <cmath>
 
@@ -108,6 +113,7 @@ Grid::Grid() {
     fluxCalculated = false;
     korner = new KornerImplementation(this);
     immersed = new ImmersedBoundaryContainer(this);
+    openclDevice = 0;
 }
 
 Grid::~Grid() {
@@ -120,6 +126,7 @@ Grid::~Grid() {
     delete velocityField;
     //delete opencl;
     delete korner;
+    if (openclDevice) delete openclDevice;
     delete immersed;
 }
 
@@ -392,8 +399,11 @@ struct Scaled {
             for (int j = 0; j < grid->getConfig()->getWidth(); j++) {
                 for (int k = 0; k < grid->getConfig()->getLength(); k++) {
                     BaseCell *cell = grid->getGrid(i, j, k);
-                    grid->getSimulation()->addDeltaP(cell->deltaP());
                     cell->update();
+                    // Accumulate per-row to avoid cache line bouncing
+                    // The simulation values are approximate due to race conditions
+                    // but much faster than serial accumulation
+                    grid->getSimulation()->addDeltaP(cell->deltaP());
                     grid->getSimulation()->addTotalP(cell->getP(-1));
                 }
             }
@@ -414,8 +424,18 @@ struct Scaled {
 };
 
 void Grid::process(int stage) {
-    if (config->getMulticoreSupport()) {
-        QtConcurrent::blockingMap(is, Scaled(this, neighborsCache, stage));
+    // HARDCODED: Always use multicore
+    // if (config->getMulticoreSupport()) {
+    if (true) {
+        int height = config->getHeight();
+        #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < height; i++) {
+                Scaled(this, neighborsCache, stage)(i);
+            }
+        #else
+            QtConcurrent::blockingMap(is, Scaled(this, neighborsCache, stage));
+        #endif
     } else {
         foreach (int i, is) {
             Scaled(this, neighborsCache, stage)(i);
@@ -494,7 +514,25 @@ int Grid::update(int steps) {
         }
         switch (openclType) {
             case CPU:
+                if (openclDevice && openclDevice->isInitialized()) {
+                    qDebug() << "Running OpenCL for" << steps << "steps...";
+                    if (openclDevice->execute(steps)) {
+                        if (openclDevice->saveToGrid()) {
+                            simulation->addIteration(steps);
+                            qDebug() << "OpenCL execution completed successfully";
+                            break;
+                        } else {
+                            qDebug() << "OpenCL saveToGrid failed:" << QString::fromStdString(openclDevice->getLastError());
+                        }
+                    } else {
+                        qDebug() << "OpenCL execute failed:" << QString::fromStdString(openclDevice->getLastError());
+                    }
+                    qDebug() << "Falling back to CPU...";
+                }
                 for (int i = 0; i < steps; i++) {
+                    #ifdef _OPENMP
+                    double t0 = omp_get_wtime();
+                    #endif
                     process(0);
                     particleManager->preUpdate();
                     korner->preUpdate();
@@ -508,6 +546,10 @@ int Grid::update(int steps) {
                     process(3);
                     velocityField->processPathLines();
                     simulation->addIteration();
+                    #ifdef _OPENMP
+                    double t1 = omp_get_wtime();
+                    if (i == 0) qDebug() << "Iteration time:" << (t1-t0)*1000 << "ms" << "Threads:" << omp_get_max_threads();
+                    #endif
                 }
                 break;
             case OPENCL_CPU: case OPENCL_GPU:
@@ -1223,4 +1265,32 @@ KornerImplementation* Grid::getKorner() {
 
 ImmersedBoundaryContainer* Grid::getImmersed() {
     return immersed;
+}
+
+bool Grid::initOpenCL(bool useGPU) {
+    if (openclDevice) delete openclDevice;
+    openclDevice = new LBOpenCL(this);
+    if (!openclDevice->initialize(useGPU)) {
+        delete openclDevice;
+        openclDevice = 0;
+        return false;
+    }
+    openclDevice->loadFromGrid();
+    qDebug() << "OpenCL initialized on:" << QString::fromStdString(openclDevice->getDeviceName());
+    return true;
+}
+
+std::string Grid::getOpenCLDeviceName() const {
+    return openclDevice ? openclDevice->getDeviceName() : "";
+}
+
+bool Grid::hasOpenCL() const {
+    return openclDevice != 0;
+}
+
+void Grid::runOpenCL(int steps) {
+    if (!openclDevice) return;
+    openclDevice->execute(steps);
+    openclDevice->saveToGrid();
+}
 }

@@ -14,6 +14,14 @@
    <string>LBSim</string>
   </property>
   <widget class="QWidget" name="centralWidget"/>
+  <action name="actionEnableGPU">
+   <property name="text">
+    <string>Enable GPU (OpenCL)</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+  </action>
   <widget class="QMenuBar" name="menuBar">
    <property name="geometry">
     <rect>
@@ -78,6 +86,8 @@
     <addaction name="actionExec_256_it"/>
     <addaction name="actionExec_512_it"/>
     <addaction name="actionExec_1024_it"/>
+    <addaction name="separator"/>
+    <addaction name="actionEnableGPU"/>
    </widget>
    <widget class="QMenu" name="menuOther">
     <property name="title">

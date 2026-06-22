@@ -15,6 +15,17 @@ TARGET = LatticeBoltzmann
 TEMPLATE = app
 INCLUDEPATH += "view/util"
 
+# Performance Optimization Flags
+QMAKE_CXXFLAGS_RELEASE -= -O2
+QMAKE_CXXFLAGS += -fopenmp
+LIBS += -fopenmp
+LIBS += -lOpenCL
+QMAKE_CXXFLAGS += -O3
+QMAKE_CXXFLAGS += -march=native
+QMAKE_CXXFLAGS += -ffast-math
+QMAKE_CXXFLAGS += -funroll-loops
+QMAKE_CXXFLAGS += -fomit-frame-pointer
+
 include(qwt/qwt.prf)
 
 SOURCES += \
@@ -137,7 +148,8 @@ SOURCES += \
     model/math/mytwovector3d.cpp \
     view/immersed.cpp \
     model/latticeboltzmann/immersed/rectangleitem.cpp \
-    model/latticeboltzmann/immersed/fileitem.cpp
+    model/latticeboltzmann/immersed/fileitem.cpp \
+    model/latticeboltzmann/opencl/lbopencl.cpp
 HEADERS += \
     view/lbmainwindow.h \
     view/lbwidget.h \
@@ -261,7 +273,8 @@ HEADERS += \
     model/math/mytwovector3d.h \
     view/immersed.h \
     model/latticeboltzmann/immersed/rectangleitem.h \
-    model/latticeboltzmann/immersed/fileitem.h
+    model/latticeboltzmann/immersed/fileitem.h \
+    model/latticeboltzmann/opencl/lbopencl.h
 FORMS += \
     view/lbmainwindow.ui \
     view/info.ui \

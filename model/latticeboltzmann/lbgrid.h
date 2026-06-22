@@ -42,6 +42,7 @@ class LBOCL;
 class OpenCLDevice;
 class Allocation;
 class KornerImplementation;
+class LBOpenCL;
 class ImmersedBoundaryContainer;
 
 class Grid {
@@ -80,6 +81,10 @@ public:
     int getDrags();
     //void setOpenclType(int openclType, bool doublePrecision, std::list<OpenCLDevice*> *devices);
     void setOpenclUpdate(int openclUpdate);
+    bool initOpenCL(bool useGPU = true);
+    bool hasOpenCL() const;
+    std::string getOpenCLDeviceName() const;
+    void runOpenCL(int steps);
     int getOpenclUpdate();
     bool isRunning();
     void processNeighbors();
@@ -105,6 +110,7 @@ private:
     VelocityField *velocityField;
     std::map<int, MyVector3D> drag;
     int openclType, openclUpdate, lastOpenclUpdate;
+    LBOpenCL* openclDevice;
     std::map<int, Listener*> listeners;
     MyVector3D *fluxes;
     bool fluxCalculated;
