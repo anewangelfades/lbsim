@@ -71,8 +71,7 @@ bool LBOpenCL::buildProgram(const std::string& source) {
         clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
         std::vector<char> log(logSize);
         clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, logSize, log.data(), nullptr);
-        lastError = "Kernel compilation failed:
-" + std::string(log.data());
+        lastError = std::string("Kernel compilation failed:\n") + log.data();
         qDebug() << "OpenCL Build Error:" << log.data();
         return false;
     }
@@ -313,7 +312,7 @@ bool LBOpenCL::execute(int steps) {
         if (!checkError(err, "clEnqueueNDRangeKernel copyKernel")) return false;
     }
 
-    err = clFinish(queue);
+    cl_int err = clFinish(queue);
     if (!checkError(err, "clFinish")) return false;
 
     return true;
