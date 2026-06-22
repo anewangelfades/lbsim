@@ -300,14 +300,15 @@ bool LBOpenCL::execute(int steps) {
         return false;
     }
 
-    size_t globalSize = (size_t)totalCells;
-    size_t localSize = 256;
+    size_t localSize = 128;
+    size_t globalSize = ((size_t)totalCells + localSize - 1) / localSize * localSize;
+    // localSize moved above
 
     for (int step = 0; step < steps; step++) {
         cl_int err = clEnqueueNDRangeKernel(queue, stepKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, nullptr);
         if (!checkError(err, "clEnqueueNDRangeKernel stepKernel")) return false;
 
-        size_t copyGlobal = (size_t)totalCells * 19;
+        size_t copyGlobal = ((size_t)totalCells * 19 + localSize - 1) / localSize * localSize;
         err = clEnqueueNDRangeKernel(queue, copyKernel, 1, nullptr, &copyGlobal, &localSize, 0, nullptr, nullptr);
         if (!checkError(err, "clEnqueueNDRangeKernel copyKernel")) return false;
     }
