@@ -510,66 +510,55 @@ void Grid::processNeighbors() {
 }
 
 int Grid::update(int steps) {
- if (isRunning()) {
- if (config->getProcessNeighbors()) {
- processNeighbors();
- config->setProcessNeighbors(false);
- }
- switch (openclType) {
- case CPU:
- if (openclDevice && openclDevice->isInitialized()) {
- qDebug() << "Running OpenCL for" << steps << "steps...";
- if (openclDevice->execute(steps)) {
- if (openclDevice->saveToGrid()) {
- simulation->addIteration(steps);
- qDebug() << "OpenCL execution completed successfully";
- break;
- } else {
- qDebug() << "OpenCL saveToGrid failed:" << QString::fromStdString(openclDevice->getLastError());
- }
- } else {
- qDebug() << "OpenCL execute failed:" << QString::fromStdString(openclDevice->getLastError());
- }
- qDebug() << "Falling back to CPU...";
- }
- for (int i = 0; i < steps; i++) {
- #ifdef _OPENMP
- double t0 = omp_get_wtime();
- #endif
- process(0);
- particleManager->preUpdate();
- korner->preUpdate();
- immersed->preUpdate1();
- process(1);
- simulation->resetDeltaP();
- simulation->resetTotalP();
- process(2);
- simulation->calcDeltaP();
- particleManager->update();
- process(3);
- velocityField->processPathLines();
- simulation->addIteration();
- #ifdef _OPENMP
- double t1 = omp_get_wtime();
- if (i == 0) qDebug() << "Iteration time:" << (t1-t0)*1000 << "ms" << "Threads:" << omp_get_max_threads();
- #endif
- }
- break;
- case OPENCL_CPU: case OPENCL_GPU:
- //opencl->execute(steps);
- simulation->addIteration(steps);
- if (simulation->getIterations() != 0 && (simulation->getIterations() - lastOpenclUpdate >= openclUpdate || simulation->getIterations() < lastOpenclUpdate)) {
- lastOpenclUpdate = simulation->getIterations();
- //opencl->unload();
- }
- break;
- }
- //ListenerData listenerData(ListenerData::createIterations(simulation->addIteration(), 0, simulation->getDeltaP(), 0, simulation->getTotalP() / simulation->getDeltasP()));
- //listener->modelCallback(listenerData);
- notifyListeners(LISTENER_EVENT_GRIDUPDATE);
- return steps;
- }
- return 0;
+    if (isRunning()) {
+        if (config->getProcessNeighbors()) {
+            processNeighbors();
+            config->setProcessNeighbors(false);
+        }
+        // Esegui OpenCL per TUTTI i tipi (CPU, OPENCL_CPU, OPENCL_GPU)
+        if (openclDevice && openclDevice->isInitialized()) {
+            qDebug() << "Running OpenCL for" << steps << "steps...";
+            if (openclDevice->execute(steps)) {
+                if (openclDevice->saveToGrid()) {
+                    simulation->addIteration(steps);
+                    qDebug() << "OpenCL execution completed successfully";
+                } else {
+                    qDebug() << "OpenCL saveToGrid failed:" << QString::fromStdString(openclDevice->getLastError());
+                    goto fallback_cpu;
+                }
+            } else {
+                qDebug() << "OpenCL execute failed:" << QString::fromStdString(openclDevice->getLastError());
+                goto fallback_cpu;
+            }
+        } else {
+fallback_cpu:
+            for (int i = 0; i < steps; i++) {
+#ifdef _OPENMP
+                double t0 = omp_get_wtime();
+#endif
+                process(0);
+                particleManager->preUpdate();
+                korner->preUpdate();
+                immersed->preUpdate1();
+                process(1);
+                simulation->resetDeltaP();
+                simulation->resetTotalP();
+                process(2);
+                simulation->calcDeltaP();
+                particleManager->update();
+                process(3);
+                velocityField->processPathLines();
+                simulation->addIteration();
+#ifdef _OPENMP
+                double t1 = omp_get_wtime();
+                if (i == 0) qDebug() << "Iteration time:" << (t1-t0)*1000 << "ms" << "Threads:" << omp_get_max_threads();
+#endif
+            }
+        }
+        notifyListeners(LISTENER_EVENT_GRIDUPDATE);
+        return steps;
+    }
+    return 0;
 }
 
 void Grid::reset() {

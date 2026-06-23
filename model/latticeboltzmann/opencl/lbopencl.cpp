@@ -16,12 +16,16 @@
 #define CELL_SOURCE 2
 #define CELL_OPEN 3
 
+// D2Q9: 9 lattice directions (matches SCCell allocation)
+#define NUM_DIR 9
+
 LBOpenCL::LBOpenCL(Grid* g)
  : initialized(false), grid(g), platform(0), device(0),
  context(0), queue(0), program(0), stepKernel(0), streamKernel(0),
  fBuffer(0), fPostBuffer(0), cellTypeBuffer(0),
  rhoBuffer(0), uxBuffer(0), uyBuffer(0), uzBuffer(0),
- width(0), height(0), length(0), totalCells(0), tau(0.0) {
+ sourceUXBuffer(0), sourceUYBuffer(0),
+ width(0), height(0), length(0), totalCells(0), epsilon(0.0) {
 }
 
 LBOpenCL::~LBOpenCL() {
@@ -40,13 +44,18 @@ void LBOpenCL::releaseAll() {
  if (uxBuffer) clReleaseMemObject(uxBuffer);
  if (uyBuffer) clReleaseMemObject(uyBuffer);
  if (uzBuffer) clReleaseMemObject(uzBuffer);
+ if (sourceUXBuffer) clReleaseMemObject(sourceUXBuffer);
+ if (sourceUYBuffer) clReleaseMemObject(sourceUYBuffer);
  if (context) clReleaseContext(context);
  stepKernel = streamKernel = 0;
  program = 0;
  queue = 0;
  fBuffer = fPostBuffer = cellTypeBuffer = rhoBuffer = uxBuffer = uyBuffer = uzBuffer = 0;
+ sourceUXBuffer = sourceUYBuffer = 0;
  context = 0;
  cellTypeHost.clear();
+ sourceUXHost.clear();
+ sourceUYHost.clear();
 }
 
 bool LBOpenCL::checkError(cl_int err, const std::string& op) {
@@ -171,7 +180,7 @@ bool LBOpenCL::loadFromGrid() {
  height = config->getHeight();
  length = config->getLength();
  totalCells = width * height * length;
- tau = config->getEpsilons()[0];
+ epsilon = config->getEpsilons()[0];
 
  qDebug() << "OpenCL: Loading grid" << width << "x" << height << "x" << length << "=" << totalCells << "cells";
 
@@ -182,9 +191,10 @@ bool LBOpenCL::loadFromGrid() {
  }
 
  cl_int err;
- size_t fSize = (size_t)totalCells * 19 * sizeof(double);
+ size_t fSize = (size_t)totalCells * NUM_DIR * sizeof(double);
  size_t cellSize = (size_t)totalCells * sizeof(int);
  size_t macroSize = (size_t)totalCells * sizeof(double);
+ size_t velSize = (size_t)totalCells * sizeof(double);
 
  qDebug() << "OpenCL: Allocating buffers...";
 
@@ -209,10 +219,18 @@ bool LBOpenCL::loadFromGrid() {
  uzBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer uzBuffer")) return false;
 
+ sourceUXBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, velSize, nullptr, &err);
+ if (!checkError(err, "clCreateBuffer sourceUXBuffer")) return false;
+
+ sourceUYBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, velSize, nullptr, &err);
+ if (!checkError(err, "clCreateBuffer sourceUYBuffer")) return false;
+
  qDebug() << "OpenCL: Buffers allocated successfully";
 
- std::vector<double> fHost((size_t)totalCells * 19);
+ std::vector<double> fHost((size_t)totalCells * NUM_DIR);
  cellTypeHost.resize((size_t)totalCells);
+ sourceUXHost.resize((size_t)totalCells, 0.0);
+ sourceUYHost.resize((size_t)totalCells, 0.0);
 
  qDebug() << "OpenCL: Copying grid data to host buffers...";
 
@@ -235,14 +253,17 @@ bool LBOpenCL::loadFromGrid() {
  cellTypeHost[idx] = CELL_WALL;
  } else if (dynamic_cast<SourceCell*>(cell)) {
  cellTypeHost[idx] = CELL_SOURCE;
+ MyVector3D u = cell->getU(0);
+ sourceUXHost[idx] = u.getX();
+ sourceUYHost[idx] = u.getY();
  } else if (dynamic_cast<OpenCell*>(cell)) {
  cellTypeHost[idx] = CELL_OPEN;
  } else {
  cellTypeHost[idx] = CELL_FLUID;
  }
 
- for (int d = 0; d < 19; d++) {
- fHost[idx * 19 + d] = cell->getF(d, 0);
+ for (int d = 0; d < NUM_DIR; d++) {
+ fHost[idx * NUM_DIR + d] = cell->getF(d, 0);
  }
  }
  }
@@ -255,6 +276,12 @@ bool LBOpenCL::loadFromGrid() {
 
  err = clEnqueueWriteBuffer(queue, cellTypeBuffer, CL_TRUE, 0, cellSize, cellTypeHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueWriteBuffer cellTypeBuffer")) return false;
+
+ err = clEnqueueWriteBuffer(queue, sourceUXBuffer, CL_TRUE, 0, velSize, sourceUXHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer sourceUXBuffer")) return false;
+
+ err = clEnqueueWriteBuffer(queue, sourceUYBuffer, CL_TRUE, 0, velSize, sourceUYHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer sourceUYBuffer")) return false;
 
  clFinish(queue);
 
@@ -280,8 +307,12 @@ bool LBOpenCL::loadFromGrid() {
  if (!checkError(err, "clSetKernelArg step 8")) return false;
  err = clSetKernelArg(stepKernel, 9, sizeof(int), &length);
  if (!checkError(err, "clSetKernelArg step 9")) return false;
- err = clSetKernelArg(stepKernel, 10, sizeof(double), &tau);
+ err = clSetKernelArg(stepKernel, 10, sizeof(double), &epsilon);
  if (!checkError(err, "clSetKernelArg step 10")) return false;
+ err = clSetKernelArg(stepKernel, 11, sizeof(cl_mem), &sourceUXBuffer);
+ if (!checkError(err, "clSetKernelArg step 11")) return false;
+ err = clSetKernelArg(stepKernel, 12, sizeof(cl_mem), &sourceUYBuffer);
+ if (!checkError(err, "clSetKernelArg step 12")) return false;
 
  err = clSetKernelArg(streamKernel, 0, sizeof(cl_mem), &fBuffer);
  if (!checkError(err, "clSetKernelArg stream 0")) return false;
@@ -329,9 +360,9 @@ bool LBOpenCL::saveToGrid() {
  return false;
  }
 
- std::vector<double> fHost((size_t)totalCells * 19);
+ std::vector<double> fHost((size_t)totalCells * NUM_DIR);
 
- cl_int err = clEnqueueReadBuffer(queue, fBuffer, CL_TRUE, 0, (size_t)totalCells * 19 * sizeof(double), fHost.data(), 0, nullptr, nullptr);
+ cl_int err = clEnqueueReadBuffer(queue, fBuffer, CL_TRUE, 0, (size_t)totalCells * NUM_DIR * sizeof(double), fHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueReadBuffer")) return false;
 
  err = clFinish(queue);
@@ -343,16 +374,20 @@ bool LBOpenCL::saveToGrid() {
  int idx = z * width * height + y * width + x;
  if (idx < 0 || idx >= totalCells) continue;
 
+ // Skip walls - they are handled by CPU boundary logic
  if (cellTypeHost[idx] == CELL_WALL) continue;
 
  BaseCell* cell = grid->getGrid(y, x, z);
  if (!cell) continue;
 
+ // Use dynamic_cast to SCCell which has setNextF
  SCCell* sc = dynamic_cast<SCCell*>(cell);
  if (sc) {
- for (int d = 0; d < 19; d++) {
- sc->setNextF(d, fHost[idx * 19 + d], 0);
+ for (int d = 0; d < NUM_DIR; d++) {
+ sc->setNextF(d, fHost[idx * NUM_DIR + d], 0);
  }
+ // Swap f and fNext to make the new data active
+ sc->update();
  }
  }
  }

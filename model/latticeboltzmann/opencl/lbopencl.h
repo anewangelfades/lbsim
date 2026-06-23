@@ -46,14 +46,18 @@ private:
     cl_mem uxBuffer;
     cl_mem uyBuffer;
     cl_mem uzBuffer;
+    cl_mem sourceUXBuffer;
+    cl_mem sourceUYBuffer;
 
     int width, height, length, totalCells;
-    double tau;
+    double epsilon;
 
     std::string lastError;
     std::string deviceName;
 
     std::vector<int> cellTypeHost;
+    std::vector<double> sourceUXHost;
+    std::vector<double> sourceUYHost;
 };
 
 #endif
