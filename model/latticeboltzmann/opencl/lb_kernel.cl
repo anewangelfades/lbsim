@@ -1,128 +1,75 @@
-// lb_kernel.cl
-// OpenCL kernel for D3Q19 Lattice Boltzmann Method
-// Optimized for GPU execution
-
-// D3Q19 lattice directions
 __constant int C[19][3] = {
-    {0, 0, 0},    // 0: rest
-    {1, 0, 0},    // 1: +x
-    {-1, 0, 0},   // 2: -x
-    {0, 1, 0},    // 3: +y
-    {0, -1, 0},   // 4: -y
-    {0, 0, 1},    // 5: +z
-    {0, 0, -1},   // 6: -z
-    {1, 1, 0},    // 7
-    {-1, 1, 0},   // 8
-    {1, -1, 0},   // 9
-    {-1, -1, 0},  // 10
-    {1, 0, 1},    // 11
-    {-1, 0, 1},   // 12
-    {1, 0, -1},   // 13
-    {-1, 0, -1},  // 14
-    {0, 1, 1},    // 15
-    {0, -1, 1},   // 16
-    {0, 1, -1},   // 17
-    {0, -1, -1}   // 18
+    {0,0,0}, {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0},
+    {0,0,1}, {0,0,-1}, {1,1,0}, {-1,1,0}, {1,-1,0},
+    {-1,-1,0}, {1,0,1}, {-1,0,1}, {1,0,-1}, {-1,0,-1},
+    {0,1,1}, {0,-1,1}, {0,1,-1}, {0,-1,-1}
 };
 
 __constant double W[19] = {
-    1.0/3.0,      // 0
-    1.0/18.0,     // 1-6
-    1.0/18.0,
-    1.0/18.0,
-    1.0/18.0,
-    1.0/18.0,
-    1.0/18.0,
-    1.0/36.0,     // 7-18
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0,
-    1.0/36.0
+    1.0/3.0,
+    1.0/18.0, 1.0/18.0, 1.0/18.0, 1.0/18.0, 1.0/18.0, 1.0/18.0,
+    1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0,
+    1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0
 };
 
-// Cell types
 #define CELL_FLUID 0
 #define CELL_WALL 1
 #define CELL_SOURCE 2
 #define CELL_OPEN 3
 
-// Collision and streaming kernel
-// Each work item processes one cell
 __kernel void lb_step(
-    __global double* f,           // Current distribution functions [cell*19 + dir]
-    __global double* f_next,      // Next distribution functions
-    __global int* cell_type,      // Cell type
-    __global double* rho,         // Density output
-    __global double* ux,          // Velocity x output
-    __global double* uy,          // Velocity y output
-    __global double* uz,          // Velocity z output
+    __global double* f,
+    __global double* f_post,
+    __global int* cell_type,
+    __global double* rho,
+    __global double* ux,
+    __global double* uy,
+    __global double* uz,
     const int width,
     const int height,
     const int length,
-    const double tau              // Relaxation time
+    const double tau
 ) {
     int gid = get_global_id(0);
     int total_cells = width * height * length;
-
     if (gid >= total_cells) return;
 
-    // Compute 3D coordinates from linear index
     int x = gid % width;
     int y = (gid / width) % height;
     int z = gid / (width * height);
-
     int type = cell_type[gid];
 
-    // Wall boundary - bounce-back
     if (type == CELL_WALL) {
         for (int i = 0; i < 19; i++) {
-            int opposite;
+            int opp = 0;
             switch(i) {
-                case 0: opposite = 0; break;
-                case 1: opposite = 2; break;
-                case 2: opposite = 1; break;
-                case 3: opposite = 4; break;
-                case 4: opposite = 3; break;
-                case 5: opposite = 6; break;
-                case 6: opposite = 5; break;
-                case 7: opposite = 10; break;
-                case 8: opposite = 9; break;
-                case 9: opposite = 8; break;
-                case 10: opposite = 7; break;
-                case 11: opposite = 14; break;
-                case 12: opposite = 13; break;
-                case 13: opposite = 12; break;
-                case 14: opposite = 11; break;
-                case 15: opposite = 18; break;
-                case 16: opposite = 17; break;
-                case 17: opposite = 16; break;
-                case 18: opposite = 15; break;
+                case 0: opp = 0; break;
+                case 1: opp = 2; break;
+                case 2: opp = 1; break;
+                case 3: opp = 4; break;
+                case 4: opp = 3; break;
+                case 5: opp = 6; break;
+                case 6: opp = 5; break;
+                case 7: opp = 10; break;
+                case 8: opp = 9; break;
+                case 9: opp = 8; break;
+                case 10: opp = 7; break;
+                case 11: opp = 14; break;
+                case 12: opp = 13; break;
+                case 13: opp = 12; break;
+                case 14: opp = 11; break;
+                case 15: opp = 18; break;
+                case 16: opp = 17; break;
+                case 17: opp = 16; break;
+                case 18: opp = 15; break;
             }
-            f_next[gid * 19 + i] = f[gid * 19 + opposite];
+            f_post[gid * 19 + i] = f[gid * 19 + opp];
         }
-
-        rho[gid] = 0.0;
-        ux[gid] = 0.0;
-        uy[gid] = 0.0;
-        uz[gid] = 0.0;
+        rho[gid] = 0.0; ux[gid] = 0.0; uy[gid] = 0.0; uz[gid] = 0.0;
         return;
     }
 
-    // Fluid cell - collision and streaming
-    double fi[19];
-    double r = 0.0;
-    double u_x = 0.0;
-    double u_y = 0.0;
-    double u_z = 0.0;
-
-    // Load distribution functions and compute macroscopic variables
+    double fi[19], r = 0.0, u_x = 0.0, u_y = 0.0, u_z = 0.0;
     for (int i = 0; i < 19; i++) {
         fi[i] = f[gid * 19 + i];
         r += fi[i];
@@ -130,47 +77,57 @@ __kernel void lb_step(
         u_y += fi[i] * C[i][1];
         u_z += fi[i] * C[i][2];
     }
+    if (r > 1e-100) {
+        u_x /= r; u_y /= r; u_z /= r;
+    }
 
-    u_x /= r;
-    u_y /= r;
-    u_z /= r;
-
-    // Store macroscopic variables
     rho[gid] = r;
     ux[gid] = u_x;
     uy[gid] = u_y;
     uz[gid] = u_z;
 
-    // Collision (BGK) + Streaming
-    double u2 = u_x * u_x + u_y * u_y + u_z * u_z;
-
+    double u2 = u_x*u_x + u_y*u_y + u_z*u_z;
     for (int i = 0; i < 19; i++) {
-        double cu = C[i][0] * u_x + C[i][1] * u_y + C[i][2] * u_z;
-        double feq = W[i] * r * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
-        double f_post = fi[i] - (fi[i] - feq) / tau;
-
-        // Streaming
-        int nx = x + C[i][0];
-        int ny = y + C[i][1];
-        int nz = z + C[i][2];
-
-        if (nx >= 0 && nx < width && ny >= 0 && ny < height && nz >= 0 && nz < length) {
-            int nidx = nz * width * height + ny * width + nx;
-            f_next[nidx * 19 + i] = f_post;
-        }
-        // If out of bounds, the distribution is lost (open boundary)
+        double cu = C[i][0]*u_x + C[i][1]*u_y + C[i][2]*u_z;
+        double feq = W[i] * r * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2);
+        f_post[gid * 19 + i] = fi[i] - (fi[i] - feq) / tau;
     }
 }
 
-// Copy kernel: f_next -> f
-__kernel void copy_buffer(
+__kernel void lb_stream(
     __global double* f,
-    __global double* f_next,
-    const int total_cells
+    __global double* f_post,
+    __global int* cell_type,
+    const int width,
+    const int height,
+    const int length
 ) {
     int gid = get_global_id(0);
-    int n = total_cells * 19;
-    if (gid < n) {
-        f[gid] = f_next[gid];
+    int total_cells = width * height * length;
+    if (gid >= total_cells) return;
+
+    int x = gid % width;
+    int y = (gid / width) % height;
+    int z = gid / (width * height);
+    int type = cell_type[gid];
+
+    if (type == CELL_WALL) {
+        for (int i = 0; i < 19; i++) {
+            f[gid * 19 + i] = f_post[gid * 19 + i];
+        }
+        return;
+    }
+
+    for (int i = 0; i < 19; i++) {
+        int nx = x - C[i][0];
+        int ny = y - C[i][1];
+        int nz = z - C[i][2];
+
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height && nz >= 0 && nz < length) {
+            int nidx = nz * width * height + ny * width + nx;
+            f[gid * 19 + i] = f_post[nidx * 19 + i];
+        } else {
+            f[gid * 19 + i] = f_post[gid * 19 + i];
+        }
     }
 }

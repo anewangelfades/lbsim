@@ -46,7 +46,6 @@ void LBOpenCL::releaseAll() {
  queue = 0;
  fBuffer = fPostBuffer = cellTypeBuffer = rhoBuffer = uxBuffer = uyBuffer = uzBuffer = 0;
  context = 0;
- cellTypeHost.clear();
 }
 
 bool LBOpenCL::checkError(cl_int err, const std::string& op) {
@@ -212,7 +211,7 @@ bool LBOpenCL::loadFromGrid() {
  qDebug() << "OpenCL: Buffers allocated successfully";
 
  std::vector<double> fHost((size_t)totalCells * 19);
- cellTypeHost.resize((size_t)totalCells);
+ std::vector<int> cellTypeHost((size_t)totalCells);
 
  qDebug() << "OpenCL: Copying grid data to host buffers...";
 
@@ -324,8 +323,8 @@ bool LBOpenCL::execute(int steps) {
 }
 
 bool LBOpenCL::saveToGrid() {
- if (!initialized || !grid || cellTypeHost.empty()) {
- lastError = "Not initialized or no cell types loaded";
+ if (!initialized || !grid) {
+ lastError = "Not initialized";
  return false;
  }
 
@@ -343,15 +342,10 @@ bool LBOpenCL::saveToGrid() {
  int idx = z * width * height + y * width + x;
  if (idx < 0 || idx >= totalCells) continue;
 
- if (cellTypeHost[idx] == CELL_WALL) continue;
-
  BaseCell* cell = grid->getGrid(y, x, z);
- if (!cell) continue;
-
- SCCell* sc = dynamic_cast<SCCell*>(cell);
- if (sc) {
+ if (cell && cell->isFluid()) {
  for (int d = 0; d < 19; d++) {
- sc->setNextF(d, fHost[idx * 19 + d], 0);
+ cell->setNextF(d, fHost[idx * 19 + d], 0);
  }
  }
  }

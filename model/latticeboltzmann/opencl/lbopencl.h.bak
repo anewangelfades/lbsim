@@ -4,7 +4,6 @@
 #define CL_TARGET_OPENCL_VERSION 120
 #include <CL/cl.h>
 #include <string>
-#include <vector>
 #include <QDebug>
 
 class Grid;
@@ -13,24 +12,24 @@ class LBOpenCL {
 public:
     LBOpenCL(Grid* grid);
     ~LBOpenCL();
-
+    
     bool initialize(bool useGPU = false);
     bool loadFromGrid();
     bool execute(int steps);
     bool saveToGrid();
-
+    
     bool isInitialized() const { return initialized; }
     std::string getLastError() const { return lastError; }
     std::string getDeviceName() const { return deviceName; }
-
+    
 private:
     bool checkError(cl_int err, const std::string& op);
     bool buildProgram(const std::string& source);
     void releaseAll();
-
+    
     bool initialized;
     Grid* grid;
-
+    
     cl_platform_id platform;
     cl_device_id device;
     cl_context context;
@@ -38,7 +37,7 @@ private:
     cl_program program;
     cl_kernel stepKernel;
     cl_kernel streamKernel;
-
+    
     cl_mem fBuffer;
     cl_mem fPostBuffer;
     cl_mem cellTypeBuffer;
@@ -46,14 +45,12 @@ private:
     cl_mem uxBuffer;
     cl_mem uyBuffer;
     cl_mem uzBuffer;
-
+    
     int width, height, length, totalCells;
     double tau;
-
+    
     std::string lastError;
     std::string deviceName;
-
-    std::vector<int> cellTypeHost;
 };
 
 #endif
