@@ -36,8 +36,7 @@ private:
     cl_context context;
     cl_command_queue queue;
     cl_program program;
-    cl_kernel stepKernel;
-    cl_kernel streamKernel;
+    cl_kernel collideStreamKernel;
 
     cl_mem fBuffer;
     cl_mem fPostBuffer;

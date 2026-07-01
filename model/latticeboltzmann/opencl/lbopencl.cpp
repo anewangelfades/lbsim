@@ -6,22 +6,25 @@
 #include "../boundary/wallcell.h"
 #include "../boundary/sourcecell.h"
 #include "../boundary/opencell.h"
+#include "../moving/movingcell.h"
 #include <fstream>
 #include <sstream>
 #include <vector>
 #include <string>
+#include <algorithm>
 
 #define CELL_FLUID 0
 #define CELL_WALL 1
 #define CELL_SOURCE 2
 #define CELL_OPEN 3
+#define CELL_MOVING_WALL 4
 
-// D2Q9: 9 lattice directions (matches SCCell allocation)
+// D2Q9: 9 lattice directions
 #define NUM_DIR 9
 
 LBOpenCL::LBOpenCL(Grid* g)
  : initialized(false), grid(g), platform(0), device(0),
- context(0), queue(0), program(0), stepKernel(0), streamKernel(0),
+ context(0), queue(0), program(0), collideStreamKernel(0),
  fBuffer(0), fPostBuffer(0), cellTypeBuffer(0),
  rhoBuffer(0), uxBuffer(0), uyBuffer(0), uzBuffer(0),
  sourceUXBuffer(0), sourceUYBuffer(0),
@@ -33,8 +36,7 @@ LBOpenCL::~LBOpenCL() {
 }
 
 void LBOpenCL::releaseAll() {
- if (stepKernel) clReleaseKernel(stepKernel);
- if (streamKernel) clReleaseKernel(streamKernel);
+ if (collideStreamKernel) clReleaseKernel(collideStreamKernel);
  if (program) clReleaseProgram(program);
  if (queue) clReleaseCommandQueue(queue);
  if (fBuffer) clReleaseMemObject(fBuffer);
@@ -47,7 +49,7 @@ void LBOpenCL::releaseAll() {
  if (sourceUXBuffer) clReleaseMemObject(sourceUXBuffer);
  if (sourceUYBuffer) clReleaseMemObject(sourceUYBuffer);
  if (context) clReleaseContext(context);
- stepKernel = streamKernel = 0;
+ collideStreamKernel = 0;
  program = 0;
  queue = 0;
  fBuffer = fPostBuffer = cellTypeBuffer = rhoBuffer = uxBuffer = uyBuffer = uzBuffer = 0;
@@ -75,7 +77,7 @@ bool LBOpenCL::buildProgram(const std::string& source) {
  program = clCreateProgramWithSource(context, 1, &src, &len, &err);
  if (!checkError(err, "clCreateProgramWithSource")) return false;
 
- err = clBuildProgram(program, 1, &device, "-cl-fast-relaxed-math", nullptr, nullptr);
+ err = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr);
  if (err != CL_SUCCESS) {
  size_t logSize;
  clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
@@ -88,13 +90,10 @@ bool LBOpenCL::buildProgram(const std::string& source) {
 
  qDebug() << "Kernel compiled successfully";
 
- stepKernel = clCreateKernel(program, "lb_step", &err);
- if (!checkError(err, "clCreateKernel lb_step")) return false;
+ collideStreamKernel = clCreateKernel(program, "lb_collide_stream", &err);
+ if (!checkError(err, "clCreateKernel lb_collide_stream")) return false;
 
- streamKernel = clCreateKernel(program, "lb_stream", &err);
- if (!checkError(err, "clCreateKernel lb_stream")) return false;
-
- qDebug() << "Kernels created successfully";
+ qDebug() << "Kernel created successfully";
  return true;
 }
 
@@ -207,7 +206,7 @@ bool LBOpenCL::loadFromGrid() {
  cellTypeBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, cellSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer cellTypeBuffer")) return false;
 
- rhoBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
+ rhoBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer rhoBuffer")) return false;
 
  uxBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
@@ -228,6 +227,7 @@ bool LBOpenCL::loadFromGrid() {
  qDebug() << "OpenCL: Buffers allocated successfully";
 
  std::vector<double> fHost((size_t)totalCells * NUM_DIR);
+ std::vector<double> rhoHost((size_t)totalCells, 1.0); // Initialize density
  cellTypeHost.resize((size_t)totalCells);
  sourceUXHost.resize((size_t)totalCells, 0.0);
  sourceUYHost.resize((size_t)totalCells, 0.0);
@@ -249,7 +249,12 @@ bool LBOpenCL::loadFromGrid() {
  continue;
  }
 
- if (dynamic_cast<WallCell*>(cell)) {
+ if (dynamic_cast<MovingCell*>(cell)) {
+ cellTypeHost[idx] = CELL_MOVING_WALL;
+ MyVector3D u = cell->getU(0);
+ sourceUXHost[idx] = u.getX();
+ sourceUYHost[idx] = u.getY();
+ } else if (dynamic_cast<WallCell*>(cell)) {
  cellTypeHost[idx] = CELL_WALL;
  } else if (dynamic_cast<SourceCell*>(cell)) {
  cellTypeHost[idx] = CELL_SOURCE;
@@ -261,9 +266,13 @@ bool LBOpenCL::loadFromGrid() {
  } else {
  cellTypeHost[idx] = CELL_FLUID;
  }
+ 
+ double cellP = cell->getP(-1);
+ rhoHost[idx] = (cellP > 1e-100) ? cellP : 1.0;
 
  for (int d = 0; d < NUM_DIR; d++) {
- fHost[idx * NUM_DIR + d] = cell->getF(d, 0);
+ // Structure of Arrays layout: fHost[d * totalCells + idx]
+ fHost[d * totalCells + idx] = cell->getF(d, 0);
  }
  }
  }
@@ -273,6 +282,13 @@ bool LBOpenCL::loadFromGrid() {
 
  err = clEnqueueWriteBuffer(queue, fBuffer, CL_TRUE, 0, fSize, fHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueWriteBuffer fBuffer")) return false;
+
+ // Initialize fPostBuffer with same data so wall cells have valid data after first ping-pong swap
+ err = clEnqueueWriteBuffer(queue, fPostBuffer, CL_TRUE, 0, fSize, fHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer fPostBuffer")) return false;
+ 
+ err = clEnqueueWriteBuffer(queue, rhoBuffer, CL_TRUE, 0, macroSize, rhoHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer rhoBuffer")) return false;
 
  err = clEnqueueWriteBuffer(queue, cellTypeBuffer, CL_TRUE, 0, cellSize, cellTypeHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueWriteBuffer cellTypeBuffer")) return false;
@@ -287,45 +303,28 @@ bool LBOpenCL::loadFromGrid() {
 
  qDebug() << "OpenCL: Setting kernel arguments...";
 
- err = clSetKernelArg(stepKernel, 0, sizeof(cl_mem), &fBuffer);
- if (!checkError(err, "clSetKernelArg step 0")) return false;
- err = clSetKernelArg(stepKernel, 1, sizeof(cl_mem), &fPostBuffer);
- if (!checkError(err, "clSetKernelArg step 1")) return false;
- err = clSetKernelArg(stepKernel, 2, sizeof(cl_mem), &cellTypeBuffer);
- if (!checkError(err, "clSetKernelArg step 2")) return false;
- err = clSetKernelArg(stepKernel, 3, sizeof(cl_mem), &rhoBuffer);
- if (!checkError(err, "clSetKernelArg step 3")) return false;
- err = clSetKernelArg(stepKernel, 4, sizeof(cl_mem), &uxBuffer);
- if (!checkError(err, "clSetKernelArg step 4")) return false;
- err = clSetKernelArg(stepKernel, 5, sizeof(cl_mem), &uyBuffer);
- if (!checkError(err, "clSetKernelArg step 5")) return false;
- err = clSetKernelArg(stepKernel, 6, sizeof(cl_mem), &uzBuffer);
- if (!checkError(err, "clSetKernelArg step 6")) return false;
- err = clSetKernelArg(stepKernel, 7, sizeof(int), &width);
- if (!checkError(err, "clSetKernelArg step 7")) return false;
- err = clSetKernelArg(stepKernel, 8, sizeof(int), &height);
- if (!checkError(err, "clSetKernelArg step 8")) return false;
- err = clSetKernelArg(stepKernel, 9, sizeof(int), &length);
- if (!checkError(err, "clSetKernelArg step 9")) return false;
- err = clSetKernelArg(stepKernel, 10, sizeof(double), &epsilon);
- if (!checkError(err, "clSetKernelArg step 10")) return false;
- err = clSetKernelArg(stepKernel, 11, sizeof(cl_mem), &sourceUXBuffer);
- if (!checkError(err, "clSetKernelArg step 11")) return false;
- err = clSetKernelArg(stepKernel, 12, sizeof(cl_mem), &sourceUYBuffer);
- if (!checkError(err, "clSetKernelArg step 12")) return false;
-
- err = clSetKernelArg(streamKernel, 0, sizeof(cl_mem), &fBuffer);
- if (!checkError(err, "clSetKernelArg stream 0")) return false;
- err = clSetKernelArg(streamKernel, 1, sizeof(cl_mem), &fPostBuffer);
- if (!checkError(err, "clSetKernelArg stream 1")) return false;
- err = clSetKernelArg(streamKernel, 2, sizeof(cl_mem), &cellTypeBuffer);
- if (!checkError(err, "clSetKernelArg stream 2")) return false;
- err = clSetKernelArg(streamKernel, 3, sizeof(int), &width);
- if (!checkError(err, "clSetKernelArg stream 3")) return false;
- err = clSetKernelArg(streamKernel, 4, sizeof(int), &height);
- if (!checkError(err, "clSetKernelArg stream 4")) return false;
- err = clSetKernelArg(streamKernel, 5, sizeof(int), &length);
- if (!checkError(err, "clSetKernelArg stream 5")) return false;
+ err = clSetKernelArg(collideStreamKernel, 2, sizeof(cl_mem), &cellTypeBuffer);
+ if (!checkError(err, "clSetKernelArg 2")) return false;
+ err = clSetKernelArg(collideStreamKernel, 3, sizeof(cl_mem), &rhoBuffer);
+ if (!checkError(err, "clSetKernelArg 3")) return false;
+ err = clSetKernelArg(collideStreamKernel, 4, sizeof(cl_mem), &uxBuffer);
+ if (!checkError(err, "clSetKernelArg 4")) return false;
+ err = clSetKernelArg(collideStreamKernel, 5, sizeof(cl_mem), &uyBuffer);
+ if (!checkError(err, "clSetKernelArg 5")) return false;
+ err = clSetKernelArg(collideStreamKernel, 6, sizeof(cl_mem), &uzBuffer);
+ if (!checkError(err, "clSetKernelArg 6")) return false;
+ err = clSetKernelArg(collideStreamKernel, 7, sizeof(int), &width);
+ if (!checkError(err, "clSetKernelArg 7")) return false;
+ err = clSetKernelArg(collideStreamKernel, 8, sizeof(int), &height);
+ if (!checkError(err, "clSetKernelArg 8")) return false;
+ err = clSetKernelArg(collideStreamKernel, 9, sizeof(int), &length);
+ if (!checkError(err, "clSetKernelArg 9")) return false;
+ err = clSetKernelArg(collideStreamKernel, 10, sizeof(double), &epsilon);
+ if (!checkError(err, "clSetKernelArg 10")) return false;
+ err = clSetKernelArg(collideStreamKernel, 11, sizeof(cl_mem), &sourceUXBuffer);
+ if (!checkError(err, "clSetKernelArg 11")) return false;
+ err = clSetKernelArg(collideStreamKernel, 12, sizeof(cl_mem), &sourceUYBuffer);
+ if (!checkError(err, "clSetKernelArg 12")) return false;
 
  qDebug() << "OpenCL: Grid loaded successfully!";
  return true;
@@ -341,11 +340,17 @@ bool LBOpenCL::execute(int steps) {
  size_t globalSize = ((size_t)totalCells + localSize - 1) / localSize * localSize;
 
  for (int step = 0; step < steps; step++) {
- cl_int err = clEnqueueNDRangeKernel(queue, stepKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, nullptr);
- if (!checkError(err, "clEnqueueNDRangeKernel stepKernel")) return false;
+ // Set the dynamic buffers for ping-pong
+ cl_int err = clSetKernelArg(collideStreamKernel, 0, sizeof(cl_mem), &fBuffer);
+ if (!checkError(err, "clSetKernelArg 0")) return false;
+ err = clSetKernelArg(collideStreamKernel, 1, sizeof(cl_mem), &fPostBuffer);
+ if (!checkError(err, "clSetKernelArg 1")) return false;
 
- err = clEnqueueNDRangeKernel(queue, streamKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, nullptr);
- if (!checkError(err, "clEnqueueNDRangeKernel streamKernel")) return false;
+ err = clEnqueueNDRangeKernel(queue, collideStreamKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueNDRangeKernel collideStreamKernel")) return false;
+ 
+ // Ping-pong buffers
+ std::swap(fBuffer, fPostBuffer);
  }
 
  cl_int err = clFinish(queue);
@@ -374,8 +379,8 @@ bool LBOpenCL::saveToGrid() {
  int idx = z * width * height + y * width + x;
  if (idx < 0 || idx >= totalCells) continue;
 
- // Skip walls - they are handled by CPU boundary logic
- if (cellTypeHost[idx] == CELL_WALL) continue;
+ // Skip walls - they are handled by GPU boundary logic
+ if (cellTypeHost[idx] == CELL_WALL || cellTypeHost[idx] == CELL_MOVING_WALL) continue;
 
  BaseCell* cell = grid->getGrid(y, x, z);
  if (!cell) continue;
@@ -384,7 +389,8 @@ bool LBOpenCL::saveToGrid() {
  SCCell* sc = dynamic_cast<SCCell*>(cell);
  if (sc) {
  for (int d = 0; d < NUM_DIR; d++) {
- sc->setNextF(d, fHost[idx * NUM_DIR + d], 0);
+ // Structure of Arrays layout
+ sc->setNextF(d, fHost[d * totalCells + idx], 0);
  }
  // Swap f and fNext to make the new data active
  sc->update();
