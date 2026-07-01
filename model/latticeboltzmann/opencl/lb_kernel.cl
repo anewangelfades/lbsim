@@ -50,17 +50,67 @@ __kernel void lb_collide_stream(
     int x = gid % width;
     int y = (gid / width) % height;
     
-    // Source cells: set to equilibrium
-    if (type == CELL_SOURCE) {
-        double u_x = source_ux[gid];
-        double u_y = source_uy[gid];
-        double r = 1.0;
+    // Open boundaries (Inlets / Outlets)
+    if (type == CELL_SOURCE || type == CELL_OPEN) {
+        // Step 1: Extrapolate macro properties from valid fluid neighbors
+        double r = 0.0;
+        double u_x = 0.0, u_y = 0.0;
+        double weight_sum = 0.0;
+        
+        for (int i = 0; i < 9; i++) {
+            if (i == 0) continue; // Skip rest particle for extrapolation
+            
+            int nx = x + CX[i];
+            int ny = y + CY[i];
+            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                int nid = ny * width + nx;
+                int ntype = cell_type[nid];
+                if (ntype == CELL_FLUID) {
+                    double n_rho = rho_out[nid];
+                    double n_ux = ux_out[nid];
+                    double n_uy = uy_out[nid];
+                    
+                    r += n_rho;
+                    u_x += n_ux;
+                    u_y += n_uy;
+                    weight_sum += 1.0;
+                }
+            }
+        }
+        
+        if (weight_sum > 0.0) {
+            r /= weight_sum;
+            u_x /= weight_sum;
+            u_y /= weight_sum;
+        } else {
+            r = 1.0;
+            u_x = 0.0;
+            u_y = 0.0;
+        }
+        
+        // Step 2: Apply boundary constraints
+        if (type == CELL_SOURCE) {
+            // Inlet: fixed velocity, extrapolated density
+            u_x = source_ux[gid]; 
+            u_y = source_uy[gid];
+        } else if (type == CELL_OPEN) {
+            // Outlet: fixed density (pressure), extrapolated velocity
+            r = 1.0;
+        }
+        
+        // Step 3: Write equilibrium distribution
         double u2 = u_x*u_x + u_y*u_y;
         for (int i = 0; i < 9; i++) {
             double cu = CX[i]*u_x + CY[i]*u_y;
             f_post[i * total + gid] = W[i] * r * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2);
         }
-        rho_out[gid] = r; ux_out[gid] = u_x; uy_out[gid] = u_y; uz_out[gid] = 0.0;
+        
+        // Save macros for next step extrapolation
+        rho_out[gid] = r; 
+        ux_out[gid] = u_x; 
+        uy_out[gid] = u_y; 
+        uz_out[gid] = 0.0;
+        
         return;
     }
     

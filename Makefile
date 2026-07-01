@@ -2333,6 +2333,7 @@ lbopencl.o: model/latticeboltzmann/opencl/lbopencl.cpp model/latticeboltzmann/op
 		model/math/vector3i.h \
 		model/latticeboltzmann/sccell.h \
 		model/latticeboltzmann/basecell.h \
+		model/latticeboltzmann/porouscell.h \
 		model/latticeboltzmann/boundary/wallcell.h \
 		model/latticeboltzmann/boundary/sourcecell.h \
 		model/latticeboltzmann/boundary/opencell.h \

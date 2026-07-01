@@ -2,6 +2,7 @@
 #include "../lbgrid.h"
 #include "../gridconfig.h"
 #include "../sccell.h"
+#include "../../model/latticeboltzmann/porouscell.h"
 #include "../basecell.h"
 #include "../boundary/wallcell.h"
 #include "../boundary/sourcecell.h"
@@ -209,13 +210,13 @@ bool LBOpenCL::loadFromGrid() {
  rhoBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer rhoBuffer")) return false;
 
- uxBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
+ uxBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer uxBuffer")) return false;
 
- uyBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
+ uyBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer uyBuffer")) return false;
 
- uzBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, macroSize, nullptr, &err);
+ uzBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, macroSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer uzBuffer")) return false;
 
  sourceUXBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, velSize, nullptr, &err);
@@ -228,9 +229,14 @@ bool LBOpenCL::loadFromGrid() {
 
  std::vector<double> fHost((size_t)totalCells * NUM_DIR);
  std::vector<double> rhoHost((size_t)totalCells, 1.0); // Initialize density
+ std::vector<double> uxHost((size_t)totalCells, 0.0);  // Initialize velocity
+ std::vector<double> uyHost((size_t)totalCells, 0.0);
+ std::vector<double> uzHost((size_t)totalCells, 0.0);
  cellTypeHost.resize((size_t)totalCells);
  sourceUXHost.resize((size_t)totalCells, 0.0);
  sourceUYHost.resize((size_t)totalCells, 0.0);
+
+ int countFluid = 0, countWall = 0, countSource = 0, countOpen = 0, countPorous = 0, countMoving = 0;
 
  qDebug() << "OpenCL: Copying grid data to host buffers...";
 
@@ -247,24 +253,23 @@ bool LBOpenCL::loadFromGrid() {
  if (!cell) {
  cellTypeHost[idx] = CELL_WALL;
  continue;
- }
-
- if (dynamic_cast<MovingCell*>(cell)) {
- cellTypeHost[idx] = CELL_MOVING_WALL;
+ } else if (dynamic_cast<MovingCell*>(cell)) {
+ cellTypeHost[idx] = CELL_MOVING_WALL; countMoving++;
  MyVector3D u = cell->getU(0);
  sourceUXHost[idx] = u.getX();
  sourceUYHost[idx] = u.getY();
  } else if (dynamic_cast<WallCell*>(cell)) {
- cellTypeHost[idx] = CELL_WALL;
- } else if (dynamic_cast<SourceCell*>(cell)) {
- cellTypeHost[idx] = CELL_SOURCE;
- MyVector3D u = cell->getU(0);
- sourceUXHost[idx] = u.getX();
- sourceUYHost[idx] = u.getY();
- } else if (dynamic_cast<OpenCell*>(cell)) {
- cellTypeHost[idx] = CELL_OPEN;
+ cellTypeHost[idx] = CELL_WALL; countWall++;
+    } else if (SourceCell* source = dynamic_cast<SourceCell*>(cell)) {
+        cellTypeHost[idx] = CELL_SOURCE; countSource++;
+        sourceUXHost[idx] = grid->getConfig()->getSourceVelocity(source->getIndex());
+        sourceUYHost[idx] = 0.0;
+    } else if (dynamic_cast<OpenCell*>(cell)) {
+ cellTypeHost[idx] = CELL_OPEN; countOpen++;
+    } else if (dynamic_cast<PorousCell*>(cell)) {
+        cellTypeHost[idx] = CELL_FLUID; countPorous++; // Temp mapped to fluid
  } else {
- cellTypeHost[idx] = CELL_FLUID;
+ cellTypeHost[idx] = CELL_FLUID; countFluid++;
  }
  
  double cellP = cell->getP(-1);
@@ -278,6 +283,10 @@ bool LBOpenCL::loadFromGrid() {
  }
  }
 
+ qDebug() << "OpenCL Grid Summary: Fluid=" << countFluid << " Wall=" << countWall 
+          << " Source=" << countSource << " Open=" << countOpen 
+          << " Porous=" << countPorous << " Moving=" << countMoving;
+
  qDebug() << "OpenCL: Writing to GPU buffers...";
 
  err = clEnqueueWriteBuffer(queue, fBuffer, CL_TRUE, 0, fSize, fHost.data(), 0, nullptr, nullptr);
@@ -289,6 +298,15 @@ bool LBOpenCL::loadFromGrid() {
  
  err = clEnqueueWriteBuffer(queue, rhoBuffer, CL_TRUE, 0, macroSize, rhoHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueWriteBuffer rhoBuffer")) return false;
+
+ err = clEnqueueWriteBuffer(queue, uxBuffer, CL_TRUE, 0, macroSize, uxHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer uxBuffer")) return false;
+
+ err = clEnqueueWriteBuffer(queue, uyBuffer, CL_TRUE, 0, macroSize, uyHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer uyBuffer")) return false;
+
+ err = clEnqueueWriteBuffer(queue, uzBuffer, CL_TRUE, 0, macroSize, uzHost.data(), 0, nullptr, nullptr);
+ if (!checkError(err, "clEnqueueWriteBuffer uzBuffer")) return false;
 
  err = clEnqueueWriteBuffer(queue, cellTypeBuffer, CL_TRUE, 0, cellSize, cellTypeHost.data(), 0, nullptr, nullptr);
  if (!checkError(err, "clEnqueueWriteBuffer cellTypeBuffer")) return false;
