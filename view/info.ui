@@ -157,7 +157,7 @@
     </font>
    </property>
    <property name="text">
-    <string>MLUPS (avg.):</string>
+    <string>MLUPS:</string>
    </property>
   </widget>
   <widget class="QLabel" name="performance">
@@ -293,7 +293,7 @@
     <rect>
      <x>10</x>
      <y>660</y>
-     <width>141</width>
+     <width>95</width>
      <height>16</height>
     </rect>
    </property>
