@@ -1280,6 +1280,12 @@ bool Grid::hasOpenCL() const {
  return openclDevice != 0;
 }
 
+void Grid::reloadOpenCL() {
+ if (!openclDevice) return;
+ qDebug() << "OpenCL: Reloading grid data to GPU...";
+ openclDevice->loadFromGrid();
+}
+
 void Grid::runOpenCL(int steps) {
  if (!openclDevice) return;
  openclDevice->execute(steps);

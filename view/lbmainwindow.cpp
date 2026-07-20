@@ -263,6 +263,12 @@ void LBMainWindow::load() {
         widget->getPainter()->updateDisplayList(false);
         widget->getPainter()->updateCellsList();
         widget->updateGL();
+        // Re-sync GPU buffers if OpenCL is already active
+        Grid* grid = widget->getPainter()->getGrid();
+        if (grid->hasOpenCL()) {
+            qDebug() << "Re-loading grid data to GPU after file load...";
+            grid->reloadOpenCL();
+        }
     }
 }
 
@@ -459,6 +465,12 @@ void LBMainWindow::loadAll2(int version) {
     interpolation->load(reader);
     immersed->sync();
     //opencl->load(reader);
+    // Re-sync GPU buffers if OpenCL is already active
+    Grid* grid2 = widget->getPainter()->getGrid();
+    if (grid2->hasOpenCL()) {
+        qDebug() << "Re-loading grid data to GPU after loadAll2...";
+        grid2->reloadOpenCL();
+    }
     widget->updateGL();
     file2.close();
     if (ui->actionUse_zipped_lb3->isChecked() && version == 2) {

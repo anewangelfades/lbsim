@@ -198,6 +198,17 @@ bool LBOpenCL::loadFromGrid() {
 
  qDebug() << "OpenCL: Allocating buffers...";
 
+ // Release old buffers if re-loading
+ if (fBuffer) { clReleaseMemObject(fBuffer); fBuffer = 0; }
+ if (fPostBuffer) { clReleaseMemObject(fPostBuffer); fPostBuffer = 0; }
+ if (cellTypeBuffer) { clReleaseMemObject(cellTypeBuffer); cellTypeBuffer = 0; }
+ if (rhoBuffer) { clReleaseMemObject(rhoBuffer); rhoBuffer = 0; }
+ if (uxBuffer) { clReleaseMemObject(uxBuffer); uxBuffer = 0; }
+ if (uyBuffer) { clReleaseMemObject(uyBuffer); uyBuffer = 0; }
+ if (uzBuffer) { clReleaseMemObject(uzBuffer); uzBuffer = 0; }
+ if (sourceUXBuffer) { clReleaseMemObject(sourceUXBuffer); sourceUXBuffer = 0; }
+ if (sourceUYBuffer) { clReleaseMemObject(sourceUYBuffer); sourceUYBuffer = 0; }
+
  fBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, fSize, nullptr, &err);
  if (!checkError(err, "clCreateBuffer fBuffer")) return false;
 

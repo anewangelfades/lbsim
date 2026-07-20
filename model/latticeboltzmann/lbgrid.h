@@ -83,6 +83,7 @@ public:
     void setOpenclUpdate(int openclUpdate);
     bool initOpenCL(bool useGPU = true);
     bool hasOpenCL() const;
+    void reloadOpenCL();
     std::string getOpenCLDeviceName() const;
     void runOpenCL(int steps);
     int getOpenclUpdate();
