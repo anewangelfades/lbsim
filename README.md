@@ -2,7 +2,7 @@
 
 **LBSim** is a 2D/3D fluid dynamics simulator based on the Lattice Boltzmann Method (LBM). 
 
-This repository is a fork of the original [LBSim by Fabio Sussumu Komori](https://github.com/fabioskomori/lbsim). It introduces massive structural overhauls to the OpenCL integration, unlocking the full potential of GPU hardware acceleration for complex fluid dynamics simulations.
+This repository is a fork of the original [LBSim by Fabio Sussumu Komori](https://github.com/fabioskomori/lbsim). It introduces structural overhauls to the OpenCL integration, unlocking the full potential of GPU hardware acceleration for complex fluid dynamics simulations.
 
 ## 🚀 Major Improvements in this Fork
 
